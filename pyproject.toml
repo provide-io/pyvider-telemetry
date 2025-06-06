@@ -6,7 +6,7 @@
 name = "pyvider-telemetry"
 description = "Pyvider Telemetry: An opinionated, developer-friendly telemetry wrapper for Python."
 version = "0.1.0"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [
@@ -22,6 +22,8 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: System :: Logging",
     "Topic :: System :: Monitoring",
@@ -102,7 +104,7 @@ addopts = "-ra -q --color=yes"
 [tool.ruff]
 line-length = 88
 indent-width = 4
-target-version = "py313"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [
@@ -133,7 +135,7 @@ show_column_numbers = true
 # Use visually nicer output in error messages:
 pretty = true
 # Use current Python version.
-python_version = "3.13"
+python_version = "3.11"
 # Warn about unused '# type: ignore' comments.
 warn_unused_ignores = true
 # Warn about unused '[mypy-pattern]'  config sections.
