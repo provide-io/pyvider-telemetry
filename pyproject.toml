@@ -6,7 +6,7 @@
 name = "pyvider-telemetry"
 description = "Pyvider Telemetry: An opinionated, developer-friendly telemetry wrapper for Python."
 version = "0.1.0"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [
@@ -22,6 +22,8 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: System :: Logging",
     "Topic :: System :: Monitoring",
@@ -76,7 +78,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 testpaths = ["tests"]
-
+pythonpath = ["src", "."]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*", "*Tests"]
 python_functions = ["test_*", "*_test"]
@@ -102,7 +104,7 @@ addopts = "-ra -q --color=yes"
 [tool.ruff]
 line-length = 88
 indent-width = 4
-target-version = "py313"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [
@@ -133,7 +135,7 @@ show_column_numbers = true
 # Use visually nicer output in error messages:
 pretty = true
 # Use current Python version.
-python_version = "3.13"
+python_version = "3.11"
 # Warn about unused '# type: ignore' comments.
 warn_unused_ignores = true
 # Warn about unused '[mypy-pattern]'  config sections.
@@ -163,7 +165,7 @@ parallel = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 80
+fail_under = 80 # Set this to a realistic target once you get >0%
 precision = 2
 exclude_lines = [
     "pragma: no cover",
@@ -174,14 +176,15 @@ exclude_lines = [
     "def __str__",
     "@(abc\\.)?abstractmethod",
     "pass",
+    # This is usually fine, but double-check it's not too greedy for your codebase
     "logger\\.(debug|info|warning|error|exception|critical|trace)\\(",
-    "import logging",
-    "from logging import",
+    "import logging", # Excluding all import logging lines might be too much
+    "from logging import", # Same as above
     "print\\(",
 ]
 
 [tool.coverage.html]
-directory = "/app/pyvider_htmlcov" # Using an absolute path
+directory = "htmlcov" # Using an absolute path
 
 [tool.coverage.xml]
 output = "coverage.xml"

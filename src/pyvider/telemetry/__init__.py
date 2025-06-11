@@ -3,73 +3,68 @@
 #
 """
 Pyvider Telemetry Library (structlog-based).
-
-This top-level `pyvider.telemetry` package module serves as the primary public interface
-for the library. It conveniently re-exports the most commonly used components,
-allowing users to import them directly from `pyvider.telemetry` without needing
-to delve into the submodule structure.
-
-Key Exports:
-- `logger`: The pre-configured global logger instance for immediate use.
-- `setup_telemetry`: Function to explicitly initialize or reconfigure telemetry settings.
-- `shutdown_pyvider_telemetry`: Async function to perform graceful shutdown procedures.
-- `TelemetryConfig`, `LoggingConfig`: Configuration objects for telemetry and logging behavior.
-- `LogLevelStr`: Type alias for valid log level strings.
-- `PRIMARY_EMOJI`, `SECONDARY_EMOJI`, `TERTIARY_EMOJI`: Dictionaries defining the
-  Domain-Action-Status (DAS) emoji mappings.
-- `__version__`: The package version string.
-
-Usage Example:
-    ```python
-    from pyvider.telemetry import logger, setup_telemetry, TelemetryConfig
-
-    # Optionally configure telemetry (or rely on defaults/environment variables)
-    # config = TelemetryConfig(service_name="my-app")
-    # setup_telemetry(config)
-
-    logger.info("Application started", domain="app", action="start", status="success")
-    ```
-
-This module aims to simplify the integration of Pyvider Telemetry into other applications
-by providing a flat and accessible API for essential functionalities.
+Primary public interface for the library, re-exporting common components.
 """
 
 from importlib.metadata import PackageNotFoundError, version
 
-# Dynamic version loading from package metadata
 try:
     __version__ = version("pyvider-telemetry")
-except PackageNotFoundError:  # pragma: no cover
-    # Fallback for development/editable installs
+except PackageNotFoundError: # pragma: no cover
     __version__ = "0.0.0-dev"
 
 from pyvider.telemetry.config import (
     LoggingConfig,
-    LogLevelStr,
     TelemetryConfig,
 )
 from pyvider.telemetry.core import (
     setup_telemetry,
     shutdown_pyvider_telemetry,
 )
-from pyvider.telemetry.logger import logger
+from pyvider.telemetry.logger import logger  # Global logger instance
 from pyvider.telemetry.logger.emoji_matrix import (
-    PRIMARY_EMOJI,
-    SECONDARY_EMOJI,
-    TERTIARY_EMOJI,
+    PRIMARY_EMOJI,  # Legacy/default domain emojis
+    SECONDARY_EMOJI,  # Legacy/default action emojis
+    TERTIARY_EMOJI,  # Legacy/default status emojis
+    show_emoji_matrix,  # Utility to display emoji configurations
 )
 
+# New type exports for semantic layering
+from pyvider.telemetry.types import (
+    ConsoleFormatterStr,
+    CustomDasEmojiSet,
+    LogLevelStr,
+    SemanticFieldDefinition,
+    SemanticLayer,
+)
+
+# New utility exports
+from pyvider.telemetry.utils import timed_block
+
 __all__ = [
-    "PRIMARY_EMOJI",
-    "SECONDARY_EMOJI",
-    "TERTIARY_EMOJI",
-    "LogLevelStr",
-    "LoggingConfig",
-    "TelemetryConfig",
-    "__version__",
+    # Core setup and logger
     "logger",
     "setup_telemetry",
     "shutdown_pyvider_telemetry",
+    # Configuration classes
+    "TelemetryConfig",
+    "LoggingConfig",
+    # Type aliases
+    "LogLevelStr",
+    "ConsoleFormatterStr",
+    # Legacy Emoji Dictionaries (still available for direct use or reference)
+    "PRIMARY_EMOJI",
+    "SECONDARY_EMOJI",
+    "TERTIARY_EMOJI",
+    # Semantic Layering classes
+    "CustomDasEmojiSet",
+    "SemanticFieldDefinition",
+    "SemanticLayer",
+    # Utilities
+    "show_emoji_matrix",
+    "timed_block",
+    # Version
+    "__version__",
 ]
 
 # 🐍📝

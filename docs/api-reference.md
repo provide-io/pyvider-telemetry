@@ -109,6 +109,10 @@ class LoggingConfig:
     logger_name_emoji_prefix_enabled: bool = field(default=True)
     das_emoji_prefix_enabled: bool = field(default=True)
     omit_timestamp: bool = field(default=False)
+    # -- NEW ATTRIBUTES --
+    enabled_semantic_layers: list[str] = field(factory=list)
+    custom_semantic_layers: list[SemanticLayer] = field(factory=list)
+    user_defined_emoji_sets: list[CustomDasEmojiSet] = field(factory=list)
 ```
 
 **Description**: Logging-specific configuration options.
@@ -118,8 +122,11 @@ class LoggingConfig:
 - `module_levels`: Per-module log level overrides
 - `console_formatter`: Output format ("key_value" or "json")
 - `logger_name_emoji_prefix_enabled`: Enable logger name emoji prefixes
-- `das_emoji_prefix_enabled`: Enable Domain-Action-Status emoji prefixes
+- `das_emoji_prefix_enabled`: Enable semantic emoji prefixes (from layers or legacy DAS).
 - `omit_timestamp`: Remove timestamps from output
+- **`enabled_semantic_layers` (new)**: A list of names of built-in or custom semantic layers to activate (e.g., `["llm", "http"]`).
+- **`custom_semantic_layers` (new)**: A list of `SemanticLayer` objects to define custom logging schemas.
+- **`user_defined_emoji_sets` (new)**: A list of `CustomDasEmojiSet` objects to add or override emoji mappings.
 
 **Environment Variables**:
 - `PYVIDER_LOG_LEVEL`: Default log level
@@ -128,6 +135,9 @@ class LoggingConfig:
 - `PYVIDER_LOG_DAS_EMOJI_ENABLED`: DAS emoji toggle
 - `PYVIDER_LOG_OMIT_TIMESTAMP`: Timestamp toggle
 - `PYVIDER_LOG_MODULE_LEVELS`: Module level overrides
+- **`PYVIDER_LOG_ENABLED_SEMANTIC_LAYERS` (new)**: Comma-separated list of layer names to enable (e.g., `"llm,http"`).
+- **`PYVIDER_LOG_CUSTOM_SEMANTIC_LAYERS` (new)**: A JSON string representing a list of `SemanticLayer` objects.
+- **`PYVIDER_LOG_USER_DEFINED_EMOJI_SETS` (new)**: A JSON string representing a list of `CustomDasEmojiSet` objects.
 
 **Example**:
 ```python
@@ -137,6 +147,7 @@ config = LoggingConfig(
     default_level="INFO",
     module_levels={"auth": "DEBUG", "db": "ERROR"},
     console_formatter="json",
+    enabled_semantic_layers=["http", "database"], # Enable built-in layers
     das_emoji_prefix_enabled=True
 )
 ```
@@ -229,8 +240,8 @@ logger.info("User login successful")
 # With formatting
 logger.info("User %s logged in from %s", "alice", "192.168.1.1")
 
-# With structured data
-logger.info("User login", user_id=123, ip="192.168.1.1", success=True)
+# With structured data (using a semantic layer)
+logger.info("HTTP Request", **{"http.method": "GET", "http.status_code": 200})
 
 # Exception logging (includes traceback)
 try:
@@ -271,11 +282,178 @@ logger.trace("Database query details",
             duration_ms=23)
 ```
 
-## 🎨 Emoji System
+<!-- NEW SECTION -->
+## ⏱️ Utility Functions
 
-### Domain-Action-Status (DAS) Logging
+### timed_block()
 
-Use `domain`, `action`, and `status` keyword arguments to trigger DAS emoji prefixes:
+```python
+def timed_block(
+    logger_instance: "PyviderLogger",
+    event_name: str,
+    layer_keys: dict[str, Any] | None = None,
+    **initial_kvs: Any
+) -> Generator[None, None, None]
+```
+
+**Description**: A context manager to log the duration and outcome of a block of code. It automatically captures the start time, executes the wrapped code block, and then logs an event including the `duration_ms`, `outcome` (success/error), and any initial or error-specific key-value pairs. If an exception occurs, it is logged and then re-raised.
+
+**Parameters**:
+- `logger_instance`: The `pyvider.telemetry.logger` instance to use for logging.
+- `event_name`: A descriptive name for the event/operation being timed.
+- `layer_keys`: Optional dictionary of pre-defined semantic keys relevant to active telemetry layers (e.g., `{"llm.task": "generation"}`). These are merged with `initial_kvs`.
+- `**initial_kvs`: Additional key-value pairs to include in the log entry from the start of the block.
+
+**Example**:
+```python
+from pyvider.telemetry import logger, timed_block
+
+# Example 1: Successful operation
+with timed_block(logger, "database_query", db_table="users", query_type="select"):
+    # ... code to execute database query ...
+    pass
+# Logs: [info] database_query db_table=users query_type=select outcome=success duration_ms=...
+
+# Example 2: Failing operation
+try:
+    with timed_block(logger, "payment_processing", transaction_id="txn_123"):
+        raise RuntimeError("Credit card declined")
+except RuntimeError:
+    # The exception is re-raised by timed_block
+    logger.info("Handling payment failure.")
+
+# Logs: [error] payment_processing transaction_id=txn_123 outcome=error error.message='Credit card declined' error.type=RuntimeError duration_ms=...
+```
+<!-- END NEW SECTION -->
+
+## 🏛️ Semantic Layer API
+
+Semantic layers provide an extensible, schema-driven way to define structured logging conventions and their corresponding emoji representations.
+
+### SemanticLayer
+
+```python
+@define(frozen=True, slots=True)
+class SemanticLayer:
+    name: str
+    description: str | None = None
+    emoji_sets: list[CustomDasEmojiSet] = field(factory=list)
+    field_definitions: list[SemanticFieldDefinition] = field(factory=list)
+    priority: int = 0
+```
+**Description**: Defines a complete semantic logging convention for a domain.
+- `name`: Unique name for the layer (e.g., "http", "database").
+- `emoji_sets`: A list of `CustomDasEmojiSet` objects used by this layer.
+- `field_definitions`: A list of `SemanticFieldDefinition` objects that define the log keys and their mapping to emoji sets. The order of this list determines the order of emojis in the prefix.
+- `priority`: A number to resolve conflicts between layers. Layers with a higher priority will override field definitions from layers with a lower priority.
+
+### SemanticFieldDefinition
+
+```python
+@define(frozen=True, slots=True)
+class SemanticFieldDefinition:
+    log_key: str
+    description: str | None = None
+    value_type: str | None = None
+    emoji_set_name: str | None = None
+    default_emoji_override_key: str | None = None
+```
+**Description**: Defines a single structured log key within a layer.
+- `log_key`: The key to look for in the log event's `kwargs` (e.g., "http.method").
+- `emoji_set_name`: The name of the `CustomDasEmojiSet` to use for finding an emoji for this key's value. If `None`, this key does not contribute to the emoji prefix.
+
+### CustomDasEmojiSet
+
+```python
+@define(frozen=True, slots=True)
+class CustomDasEmojiSet:
+    name: str
+    emojis: dict[str, str]
+    default_emoji_key: str = "default"
+```
+**Description**: A named collection of emojis mapped to specific string values.
+- `name`: A unique name for the set (e.g., "http_method", "llm_outcome").
+- `emojis`: A dictionary mapping a value (e.g., "get", "success") to an emoji (e.g., "📥", "✅").
+- `default_emoji_key`: The key within the `emojis` dict to use as a fallback.
+
+### Example: Creating a Custom `file_io` Layer
+
+This example shows how to define a completely custom layer for file operations.
+
+```python
+from pyvider.telemetry import (
+    setup_telemetry,
+    logger,
+    TelemetryConfig,
+    LoggingConfig,
+    SemanticLayer,
+    SemanticFieldDefinition,
+    CustomDasEmojiSet,
+)
+
+# 1. Define Emoji Sets for the layer
+file_op_emojis = CustomDasEmojiSet(
+    name="file_operation_emojis",
+    emojis={"read": "📖", "write": "📝", "delete": "🗑️", "default": "⚙️"}
+)
+
+file_outcome_emojis = CustomDasEmojiSet(
+    name="file_outcome_emojis",
+    emojis={"success": "✅", "not_found": "❓", "permission_denied": "🚫", "default": "🔥"}
+)
+
+# 2. Define the Semantic Fields that use these emoji sets
+file_io_fields = [
+    SemanticFieldDefinition(log_key="file.operation", emoji_set_name="file_operation_emojis"),
+    SemanticFieldDefinition(log_key="file.outcome", emoji_set_name="file_outcome_emojis"),
+    SemanticFieldDefinition(log_key="file.path"), # Does not contribute to emoji prefix
+    SemanticFieldDefinition(log_key="file.size_bytes"),
+]
+
+# 3. Create the Semantic Layer
+file_io_layer = SemanticLayer(
+    name="file_io",
+    description="Semantic conventions for file input/output operations.",
+    emoji_sets=[file_op_emojis, file_outcome_emojis],
+    field_definitions=file_io_fields,
+    priority=50
+)
+
+# 4. Configure telemetry to use the custom layer
+config = TelemetryConfig(
+    logging=LoggingConfig(
+        # Note: We don't need to "enable" the custom layer, just provide it.
+        custom_semantic_layers=[file_io_layer]
+    )
+)
+setup_telemetry(config)
+
+# 5. Log using the new semantic keys
+logger.info(
+    "File write operation complete",
+    **{
+        "file.operation": "write",
+        "file.outcome": "success",
+        "file.path": "/data/report.csv",
+        "file.size_bytes": 10240,
+    }
+)
+# Expected Output: [📝][✅] File write operation complete file.path=/data/report.csv file.size_bytes=10240
+
+logger.error(
+    "Failed to read file",
+    **{
+        "file.operation": "read",
+        "file.outcome": "permission_denied",
+        "file.path": "/etc/shadow",
+    }
+)
+# Expected Output: [📖][🚫] Failed to read file file.path=/etc/shadow
+```
+
+## 🎨 Legacy Emoji System (Fallback)
+
+When no semantic layers are active, the system falls back to the original Domain-Action-Status (DAS) pattern. Use `domain`, `action`, and `status` keyword arguments to trigger these emoji prefixes.
 
 ```python
 logger.info("User authentication", 
@@ -285,7 +463,7 @@ logger.info("User authentication",
 # Output: [🔑][➡️][✅] User authentication
 ```
 
-### Emoji Matrices
+### Emoji Dictionaries
 
 #### PRIMARY_EMOJI (Domains)
 
@@ -334,7 +512,7 @@ TERTIARY_EMOJI: dict[str, str] = {
 def show_emoji_matrix() -> None
 ```
 
-**Description**: Displays the complete emoji mapping contract.
+**Description**: Displays the complete emoji mapping contract for the **active configuration**. This is the best way to see which emojis are currently in use.
 
 **Environment Variable**: `PYVIDER_SHOW_EMOJI_MATRIX=true`
 
@@ -430,10 +608,9 @@ logger.info("Request processed",
            duration_ms=45, 
            status_code=200)
 
-# ✅ GOOD: Use DAS pattern for semantic meaning
+# ✅ GOOD: Use semantic layers for rich context
 logger.info("Payment completed",
-           domain="payment", action="process", status="success",
-           amount=99.99, payment_id="pay-456")
+           **{"payment.status": "success", "payment.amount": 99.99})
 
 # ❌ AVOID: Excessive string formatting in hot paths
 logger.debug(f"Complex calculation: {expensive_computation()}")  # Computed even if filtered
@@ -454,8 +631,7 @@ end_time = time.time()
 
 throughput = 1000 / (end_time - start_time)
 logger.info("Logging throughput measured", 
-           messages_per_second=throughput,
-           domain="system", action="benchmark", status="complete")
+           **{"system.benchmark.messages_per_second": throughput})
 ```
 
 ### **Memory and CPU Considerations**

@@ -3,41 +3,17 @@
 #
 """
 Pyvider Telemetry Emoji Matrix and Display Utilities.
-
-This module is central to the visual and semantic aspect of Domain-Action-Status
-(DAS) logging within the `pyvider-telemetry` library. It defines the core
-dictionaries that map keywords for "domain", "action", and "status" log event
-fields to their corresponding emoji representations. These emojis significantly
-improve the scannability and contextual understanding of logs.
-
-Key Components:
-- `PRIMARY_EMOJI`: Defines emojis for the 'domain' part of DAS logging,
-  representing the primary context or system component of a log event
-  (e.g., "system": "⚙️", "database": "🗄️").
-- `SECONDARY_EMOJI`: Defines emojis for the 'action' part of DAS logging,
-  representing the operation being performed (e.g., "init": "🌱", "read": "📖").
-- `TERTIARY_EMOJI`: Defines emojis for the 'status' part of DAS logging,
-  representing the outcome or state of the operation (e.g., "success": "✅",
-  "failure": "❌").
-
-These emoji mappings are utilized by the `add_das_emoji_prefix` processor in
-`custom_processors.py` to prepend a `[D][A][S]` emoji sequence to log messages.
-
-Utility Functions:
-- `show_emoji_matrix()`: A helper function that prints the current "emoji contract"
-  (all defined DAS emoji mappings) to the console using the telemetry logger.
-  This is intended for developer reference and can be activated by setting the
-  `PYVIDER_SHOW_EMOJI_MATRIX` environment variable to a truthy value (e.g.,
-  "true", "1", "yes").
-
-By centralizing these definitions, this module ensures consistency in emoji usage
-across the logging system and provides a clear reference for developers.
+Defines the legacy DAS emoji mappings and provides utilities to display
+active emoji configurations (legacy or layer-based).
 """
 import os
 
 from pyvider.telemetry.logger import (
-    base as pyvider_logger_base,
+    base as pyvider_logger_base,  # For accessing the global logger instance
 )
+
+# Import types for resolved config structure
+from pyvider.telemetry.types import CustomDasEmojiSet, SemanticFieldDefinition
 
 PRIMARY_EMOJI: dict[str, str] = {
     "system": "⚙️", "server": "🛎️", "client": "🙋", "network": "🌐",
@@ -48,10 +24,6 @@ PRIMARY_EMOJI: dict[str, str] = {
     "report": "📈", "payment": "💳",
     "default": "❓",
 }
-"""
-Emojis for the 'domain' key in Domain-Action-Status (DAS) logging.
-Represents the primary context or system component of a log event.
-"""
 
 SECONDARY_EMOJI: dict[str, str] = {
     "init": "🌱", "start": "🚀", "stop": "🛑", "connect": "🔗",
@@ -62,54 +34,96 @@ SECONDARY_EMOJI: dict[str, str] = {
     "encrypt": "🛡️", "decrypt": "🔓", "parse": "🧩", "transmit": "📡",
     "build": "🏗️", "schedule": "📅", "emit": "📢", "load": "💡",
     "observe": "🧐", "request": "🗣️", "interrupt": "🚦",
-    "register": "⚙️",  # FIXED: Added missing register action
-    "default": "❓",  # Default action emoji (unknown or missing action)
+    "register": "⚙️",
+    "default": "❓",
 }
-"""
-Emojis for the 'action' key in Domain-Action-Status (DAS) logging.
-Represents the operation or activity being performed.
-"""
 
 TERTIARY_EMOJI: dict[str, str] = {
     "success": "✅", "failure": "❌", "error": "🔥", "warning": "⚠️",
-    "info": "ℹ️",  # noqa: RUF001  -- Intentional use of INFORMATION SOURCE emoji
-    "debug": "🐞", "trace": "👣", "attempt": "⏳",
+    "info": "ℹ️", "debug": "🐞", "trace": "👣", "attempt": "⏳",
     "retry": "🔁", "skip": "⏭️", "complete": "🏁", "timeout": "⏱️",
     "notfound": "❓", "unauthorized": "🚫", "invalid": "💢", "cached": "🎯",
     "ongoing": "🏃", "idle": "💤", "ready": "👍",
     "default": "➡️",
 }
-"""
-Emojis for the 'status' key in Domain-Action-Status (DAS) logging.
-Represents the outcome, result, or state of the operation.
-"""
+
+def _format_emoji_set_for_display(emoji_set: CustomDasEmojiSet) -> list[str]:
+    lines = [f"  Emoji Set: '{emoji_set.name}' (Default Key: '{emoji_set.default_emoji_key}')"]
+    for key, emoji in sorted(emoji_set.emojis.items()):
+        lines.append(f"    {emoji}  -> {key.capitalize()}")
+    return lines
+
+def _format_field_definition_for_display(field_def: SemanticFieldDefinition) -> str:
+    parts = [f"  Log Key: '{field_def.log_key}'"]
+    if field_def.description:
+        parts.append(f"    Desc: {field_def.description}")
+    if field_def.value_type:
+        parts.append(f"    Type: {field_def.value_type}")
+    if field_def.emoji_set_name:
+        parts.append(f"    Emoji Set: '{field_def.emoji_set_name}'")
+        if field_def.default_emoji_override_key:
+            parts.append(f"    Default Emoji Key (Override): '{field_def.default_emoji_override_key}'")
+    return "\n".join(parts)
+
 
 def show_emoji_matrix() -> None: # pragma: no cover
     """
-    Prints the Pyvider emoji logging contract (DAS emoji mappings) to the console.
-
-    This utility function is designed for developer reference. It displays the
-    current mappings for primary (domain), secondary (action), and tertiary (status)
-    emojis used in Domain-Action-Status (DAS) logging.
-
-    The display is activated if the `PYVIDER_SHOW_EMOJI_MATRIX` environment
-    variable is set to a truthy value (e.g., "true", "1", "yes").
-    The output is logged using a dedicated logger instance
-    (`pyvider.telemetry.emoji_matrix_display`) at the INFO level.
+    Prints the active Pyvider emoji logging contract to the console.
+    If semantic layers are active, it displays their configuration.
+    Otherwise, it displays the legacy DAS emoji mappings.
+    Activated by `PYVIDER_SHOW_EMOJI_MATRIX` environment variable.
     """
     if os.getenv("PYVIDER_SHOW_EMOJI_MATRIX", "false").strip().lower() not in ("true", "1", "yes"):
         return
 
     matrix_logger = pyvider_logger_base.logger.get_logger("pyvider.telemetry.emoji_matrix_display")
-    lines = ["Pyvider Emoji Logging Contract:",
-             "  1. Single Prefix (logger name): `EMOJI Your log...`",
-             "  2. DAS Prefix (keys): `[D][A][S] Your log...`",
-             "="*70, "\nPrimary Emojis (DAS 'domain' key):"]
-    lines.extend(f"  {e}  -> {k.capitalize()}" for k, e in PRIMARY_EMOJI.items())
-    lines.append("\nSecondary Emojis (DAS 'action' key):")
-    lines.extend(f"  {e}  -> {k.capitalize()}" for k, e in SECONDARY_EMOJI.items())
-    lines.append("\nTertiary Emojis (DAS 'status' key):")
-    lines.extend(f"  {e}  -> {k.capitalize()}" for k, e in TERTIARY_EMOJI.items())
-    matrix_logger.info("\n".join(lines))
+
+    # Access the resolved semantic config from the global logger instance
+    # This assumes the logger has been configured (explicitly or lazily)
+    pyvider_logger_base.logger._ensure_configured() # Ensure config is loaded
+    resolved_config_tuple = getattr(pyvider_logger_base.logger, '_active_resolved_semantic_config', None)
+
+    lines: list[str] = []
+
+    if resolved_config_tuple:
+        resolved_field_definitions, resolved_emoji_sets_lookup = resolved_config_tuple
+
+        if resolved_field_definitions: # New semantic layers are active
+            lines.append("Pyvider Telemetry: Active Semantic Layer Emoji Contract")
+            lines.append("="*70)
+            lines.append("Active Semantic Field Definitions (Order determines prefix sequence):")
+            if not resolved_field_definitions:
+                lines.append("  (No semantic field definitions are active)")
+            for i, field_def in enumerate(resolved_field_definitions):
+                lines.append(f"\nField {i+1}:")
+                lines.append(_format_field_definition_for_display(field_def))
+
+            lines.append("\n" + "="*70)
+            lines.append("Available Emoji Sets (Referenced by Semantic Field Definitions):")
+            if not resolved_emoji_sets_lookup:
+                lines.append("  (No emoji sets are defined/active)")
+            for set_name in sorted(resolved_emoji_sets_lookup.keys()):
+                emoji_set = resolved_emoji_sets_lookup[set_name]
+                lines.extend(_format_emoji_set_for_display(emoji_set))
+                lines.append("") # Spacer
+
+        else: # No custom fields resolved, means legacy DAS is active
+            lines.append("Pyvider Telemetry: Legacy DAS Emoji Contract (No custom layers active)")
+            lines.append("="*70)
+            lines.append("Primary Emojis (Legacy 'domain' key):")
+            lines.extend(f"  {e}  -> {k.capitalize()}" for k, e in PRIMARY_EMOJI.items())
+            lines.append("\nSecondary Emojis (Legacy 'action' key):")
+            lines.extend(f"  {e}  -> {k.capitalize()}" for k, e in SECONDARY_EMOJI.items())
+            lines.append("\nTertiary Emojis (Legacy 'status' key):")
+            lines.extend(f"  {e}  -> {k.capitalize()}" for k, e in TERTIARY_EMOJI.items())
+    else:
+        lines.append("Pyvider Telemetry: Emoji configuration not yet resolved or available.")
+
+
+    if lines:
+        matrix_logger.info("\n".join(lines))
+    else: # Should not happen if _ensure_configured works
+        matrix_logger.warning("Could not determine active emoji configuration to display.")
+
 
 # 💡🧱
