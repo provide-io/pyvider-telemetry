@@ -115,22 +115,115 @@ fi
 if [[ "$TFOS" != "darwin" && "$TFOS" != "linux" ]]; then
     print_warning "Detected OS: $TFOS (only darwin and linux are fully tested)"
 fi
+
+# Set UV project environment early so uv commands use the correct venv
+export UV_PROJECT_ENVIRONMENT="${VENV_DIR}"
+# --- Python Version Compatibility Check ---
+RECREATE_VENV=false
+print_header "🐍 Checking Python Version Compatibility"
+
+# Get project's Python requirement
+PROJECT_PYTHON_REQ=">=3.11"
+echo "Project requires Python ${PROJECT_PYTHON_REQ}"
+
+# Function to check if we need to recreate venv
+check_python_version() {
+    local venv_dir="$1"
+    local python_bin="${venv_dir}/bin/python"
+    
+    if [ ! -f "${python_bin}" ]; then
+        return 1  # No venv exists
+    fi
+    
+    # Get current venv Python version
+    local venv_version=$("${python_bin}" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')" 2>/dev/null)
+    
+    if [ -z "${venv_version}" ]; then
+        return 1  # Couldn't get version
+    fi
+    
+    echo "Current venv has Python ${venv_version}"
+    
+    # Check if version file exists and matches
+    local version_file="${venv_dir}/.python-version"
+    if [ -f "${version_file}" ]; then
+        local saved_version=$(cat "${version_file}")
+        if [ "${saved_version}" != "${venv_version}" ]; then
+            print_warning "Python version mismatch detected!"
+            return 2  # Version mismatch
+        fi
+    fi
+    
+    # Check compatibility with project requirement
+    "${python_bin}" -c "
+import sys
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+
+requirement = '${PROJECT_PYTHON_REQ}'
+current = f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'
+
+try:
+    spec = SpecifierSet(requirement)
+    version = Version(current)
+    if version not in spec:
+        sys.exit(1)
+except:
+    # If packaging is not available, do simple comparison
+    import re
+    match = re.match(r'>=(\d+)\.(\d+)', requirement)
+    if match:
+        req_major, req_minor = int(match.group(1)), int(match.group(2))
+        if sys.version_info.major < req_major or (sys.version_info.major == req_major and sys.version_info.minor < req_minor):
+            sys.exit(1)
+" 2>/dev/null
+    
+    if [ $? -ne 0 ]; then
+        print_warning "Python ${venv_version} does not meet requirement ${PROJECT_PYTHON_REQ}"
+        return 2  # Incompatible version
+    fi
+    
+    return 0  # All good
+}
+
+# Check if we need to recreate the venv
+RECREATE_VENV=false
+if [ -d "${VENV_DIR}" ]; then
+    check_python_version "${VENV_DIR}"
+    CHECK_RESULT=$?
+    
+    if [ $CHECK_RESULT -eq 2 ]; then
+        RECREATE_VENV=true
+        print_warning "Virtual environment needs to be recreated due to Python version mismatch"
+        echo "Backing up current venv to ${VENV_DIR}.backup..."
+        mv "${VENV_DIR}" "${VENV_DIR}.backup"
+    fi
+fi
+
 # --- Virtual Environment ---
 print_header "🐍 Setting Up Virtual Environment"
 echo "Directory: ${VENV_DIR}"
 
-if [ -d "${VENV_DIR}" ] && [ -f "${VENV_DIR}/bin/activate" ] && [ -f "${VENV_DIR}/bin/python" ]; then
+if [ -d "${VENV_DIR}" ] && [ -f "${VENV_DIR}/bin/activate" ] && [ -f "${VENV_DIR}/bin/python" ] && [ "${RECREATE_VENV}" != "true" ]; then
     print_success "Virtual environment exists"
 else
-    echo -n "Creating virtual environment..."
+    if [ "${RECREATE_VENV}" = "true" ]; then
+        echo -n "Recreating virtual environment with correct Python version..."
+    else
+        echo -n "Creating virtual environment..."
+    fi
     uv venv "${VENV_DIR}" > /tmp/uv_venv.log 2>&1 &
     spinner $!
     print_success "Virtual environment created"
+    
+    # Save Python version for future checks
+    ${VENV_DIR}/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')" > "${VENV_DIR}/.python-version"
 fi
 
 # Activate virtual environment
 source "${VENV_DIR}/bin/activate"
 export VIRTUAL_ENV="$(pwd)/${VENV_DIR}"
+export UV_PROJECT_ENVIRONMENT="${VENV_DIR}"
 # --- Dependency Installation ---
 print_header "📦 Installing Dependencies"
 
@@ -142,11 +235,26 @@ uv sync --all-groups > /tmp/pyvider-telemetry_setup/sync.log 2>&1 &
 SYNC_PID=$!
 spinner $SYNC_PID
 wait $SYNC_PID
-if [ $? -eq 0 ]; then
+SYNC_EXIT_CODE=$?
+
+if [ $SYNC_EXIT_CODE -eq 0 ]; then
     print_success "Dependencies synced"
 else
-    print_error "Dependency sync failed. Check /tmp/pyvider-telemetry_setup/sync.log"
-    return 1 2>/dev/null || exit 1
+    print_warning "Dependency sync failed - will install project and siblings manually"
+    echo "Check /tmp/pyvider-telemetry_setup/sync.log for details"
+    
+    # Try to install just the project without dependencies first
+    echo -n "Installing pyvider-telemetry without dependencies..."
+    uv pip install --no-deps -e . > /tmp/pyvider-telemetry_setup/install_nodeps.log 2>&1 &
+    INSTALL_PID=$!
+    spinner $INSTALL_PID
+    wait $INSTALL_PID
+    if [ $? -eq 0 ]; then
+        print_success "pyvider-telemetry installed (no deps)"
+    else
+        print_error "Failed to install pyvider-telemetry"
+        return 1 2>/dev/null || exit 1
+    fi
 fi
 
 echo -n "Installing pyvider-telemetry in editable mode..."
@@ -160,7 +268,6 @@ PARENT_DIR=$(dirname "$(pwd)")
 SIBLING_COUNT=0
 
 
-
 if [ $SIBLING_COUNT -eq 0 ]; then
     print_warning "No sibling packages found"
 fi
@@ -172,7 +279,9 @@ export PYTHONPATH="${PWD}/src:${PWD}"
 echo "PYTHONPATH: ${PYTHONPATH}"
 
 # Clean up PATH - remove duplicates
-NEW_PATH="${VENV_DIR}/bin"
+# Ensure UV bin directories are included
+UV_BIN_PATHS="$HOME/.local/bin:$HOME/.cargo/bin"
+NEW_PATH="${VENV_DIR}/bin:${UV_BIN_PATHS}"
 OLD_IFS="$IFS"
 IFS=':'
 for p in $PATH; do
