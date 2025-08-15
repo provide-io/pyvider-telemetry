@@ -1,3 +1,10 @@
+You are absolutely right! My apologies for missing that. The `timed_block` context manager is a fantastic utility that definitely deserves to be highlighted in the documentation. It's a great example of how the library provides practical, high-level abstractions.
+
+I will now update both `README.md` and `docs/api-reference.md` to include this feature, integrating it seamlessly into the existing structure.
+
+---
+
+### ###README.md###
 <div align="center">
 
 # 🐍📡 `pyvider.telemetry`
@@ -32,7 +39,7 @@ Modern structured logging built on `structlog` with emoji-enhanced visual parsin
 ## 🤔 Why `pyvider.telemetry`?
 
 * **🎨 Visual Log Parsing:** Emoji prefixes based on logger names and semantic context make logs instantly scannable
-* **📊 Semantic Structure:** Domain-Action-Status (DAS) pattern brings meaning to your log events
+* **📊 Semantic Structure:** **(New!)** Extensible Semantic Layers for domains like LLMs, HTTP, and Databases, with a fallback to the classic Domain-Action-Status (DAS) pattern.
 * **⚡ High Performance:** Benchmarked >14,000 msg/sec (see details below)
 * **🔧 Zero Configuration:** Works beautifully out of the box, configurable via environment variables or code
 * **🎯 Developer Experience:** Thread-safe, async-ready, with comprehensive type hints for Python 3.13+
@@ -41,7 +48,7 @@ Modern structured logging built on `structlog` with emoji-enhanced visual parsin
 
 * **🎨 Emoji-Enhanced Logging:**
   * **Logger Name Prefixes:** `🔑 User authentication successful` (auth module)
-  * **Domain-Action-Status:** `[🔑][➡️][✅] Login completed` (auth-login-success)
+  * **(New!) Semantic Layer Prefixes:** `[🤖][✍️][👍] LLM response generated` (llm-generation-success)
   * **Custom TRACE Level:** Ultra-verbose debugging with `👣` visual markers
 
 * **📈 Production Ready:**
@@ -90,20 +97,56 @@ auth_logger.info("User login attempt", user_id=12345)
 # Output: 🔑 User login attempt user_id=12345
 ```
 
-### Semantic Domain-Action-Status Logging
+### 🏗️ Semantic Logging with Layers
 
+Go beyond the basic DAS pattern with extensible, schema-driven logging. Semantic Layers allow you to define structured logging conventions for specific domains (like LLMs, HTTP, or Databases) and automatically get rich, contextual emoji prefixes.
+
+**Example: Using the built-in `llm` layer**
+
+First, enable the layer in your configuration:
 ```python
-# Use domain, action, status for semantic meaning
-logger.info("User authentication",
-           domain="auth", action="login", status="success",
-           user_id=12345, ip="192.168.1.100")
-# Output: [🔑][➡️][✅] User authentication user_id=12345 ip=192.168.1.100
+from pyvider.telemetry import setup_telemetry, TelemetryConfig, LoggingConfig
 
-logger.error("Database connection failed",
-            domain="database", action="connect", status="error",
-            host="db.example.com", timeout_ms=5000)
-# Output: [🗄️][🔗][🔥] Database connection failed host=db.example.com timeout_ms=5000
+# Enable the 'llm' semantic layer
+config = TelemetryConfig(
+    logging=LoggingConfig(enabled_semantic_layers=["llm"])
+)
+setup_telemetry(config)
 ```
+
+Now, log events using the layer's defined keys (like `llm.provider`, `llm.task`, `llm.outcome`):
+```python
+from pyvider.telemetry import logger
+
+# Log a successful LLM generation task
+logger.info(
+    "LLM response generated",
+    **{
+        "llm.provider": "openai",
+        "llm.task": "generation",
+        "llm.outcome": "success",
+        "llm.model": "gpt-4o",
+        "duration_ms": 1230,
+        "llm.output.tokens": 250,
+    }
+)
+# Output: [🤖][✍️][👍] LLM response generated duration_ms=1230 llm.output.tokens=250
+
+# Log a rate-limiting event from another provider
+logger.warning(
+    "LLM call failed",
+    **{
+        "llm.provider": "anthropic",
+        "llm.task": "chat",
+        "llm.outcome": "rate_limit",
+        "llm.model": "claude-3-opus",
+    }
+)
+# Output: [📚][💬][⏳] LLM call failed
+```
+- **How it works:** The `llm` layer maps the `llm.provider` key to provider emojis (🤖 for openai, 📚 for anthropic), `llm.task` to task emojis (✍️ for generation), and `llm.outcome` to outcome emojis (👍 for success).
+- **Extensible:** You can define your own custom layers and emoji sets for your application's specific domains!
+- **Legacy DAS:** The original `domain`, `action`, `status` keys still work as a fallback if no semantic layers are active.
 
 ### Custom Configuration
 
@@ -115,6 +158,8 @@ config = TelemetryConfig(
     logging=LoggingConfig(
         default_level="INFO",
         console_formatter="json",           # JSON for production
+        # Enable built-in layers for HTTP and Database logging
+        enabled_semantic_layers=["http", "database"],
         module_levels={
             "auth": "DEBUG",                # Verbose auth logging
             "database": "ERROR",            # Only DB errors
@@ -133,6 +178,8 @@ export PYVIDER_SERVICE_NAME="my-service"
 export PYVIDER_LOG_LEVEL="INFO"
 export PYVIDER_LOG_CONSOLE_FORMATTER="json"
 export PYVIDER_LOG_MODULE_LEVELS="auth:DEBUG,db:ERROR"
+# New: Enable semantic layers via environment
+export PYVIDER_LOG_ENABLED_SEMANTIC_LAYERS="llm,http"
 ```
 
 ```python
@@ -195,19 +242,37 @@ python scripts/extreme_performance.py
 
 ## 🎨 Emoji Reference
 
-### Domain Emojis (Primary)
-- `🔑` auth, `🗄️` database, `🌐` network, `⚙️` system
-- `🛎️` server, `🙋` client, `🔐` security, `📄` file
+The emoji system is now driven by **Semantic Layers**. The active layers determine which log keys produce emoji prefixes.
 
-### Action Emojis (Secondary)
-- `➡️` login, `🔗` connect, `📤` send, `📥` receive
-- `🔍` query, `📝` write, `🗑️` delete, `⚙️` process
+### Viewing the Active Emoji Contract
 
-### Status Emojis (Tertiary)
-- `✅` success, `❌` failure, `🔥` error, `⚠️` warning
-- `⏳` attempt, `🔁` retry, `🏁` complete, `⏱️` timeout
+To see the complete emoji mappings for your **current configuration** (including any custom layers), run the following command. This is the best way to see which emojis are active.
 
-See full matrix: `PYVIDER_SHOW_EMOJI_MATRIX=true python -c "from pyvider.telemetry.logger.emoji_matrix import show_emoji_matrix; show_emoji_matrix()"`
+```bash
+# This will print the full emoji matrix for your active configuration
+export PYVIDER_SHOW_EMOJI_MATRIX=true
+python -c "from pyvider.telemetry.logger.emoji_matrix import show_emoji_matrix; show_emoji_matrix()"
+```
+
+### Built-in Layer Emojis (Examples)
+
+- **`llm` Layer:**
+  - **Provider:** `llm.provider` -> `🤖` (openai), `📚` (anthropic), `🦙` (meta)
+  - **Task:** `llm.task` -> `✍️` (generation), `💬` (chat), `🛠️` (tool_use)
+  - **Outcome:** `llm.outcome` -> `👍` (success), `🔥` (error), `⏳` (rate_limit)
+
+- **`http` Layer:**
+  - **Method:** `http.method` -> `📥` (get), `📤` (post), `🗑️` (delete)
+  - **Status Class:** `http.status_class` -> `✅` (2xx), `⚠️CLIENT` (4xx), `🔥SERVER` (5xx)
+
+### Legacy DAS Emojis (Fallback)
+
+These emojis are used when no semantic layers are active and you use the `domain`, `action`, and `status` keys.
+
+- **Domain Emojis (Primary):** `🔑` auth, `🗄️` database, `🌐` network, `⚙️` system
+- **Action Emojis (Secondary):** `➡️` login, `🔗` connect, `📤` send, `🔍` query
+- **Status Emojis (Tertiary):** `✅` success, `🔥` error, `⚠️` warning, `⏳` attempt
+
 
 ## 🔧 Advanced Usage
 
@@ -229,6 +294,30 @@ async def main():
 asyncio.run(main())
 ```
 
+<!-- NEW SECTION -->
+### Timing Code Blocks
+
+Easily log the duration and outcome of any code block using the `timed_block` context manager. It automatically handles success and failure cases.
+
+```python
+import time
+from pyvider.telemetry import logger, timed_block
+
+# Successful operation
+with timed_block(logger, "Data processing task", task_id="abc-123"):
+    time.sleep(0.05)  # Simulate work
+# Output: Data processing task task_id=abc-123 outcome=success duration_ms=50
+
+# Failing operation
+try:
+    with timed_block(logger, "Database query", table="users"):
+        raise ValueError("Connection refused")
+except ValueError:
+    pass # Exception is re-raised and caught here
+# Output: Database query table=users outcome=error error.message='Connection refused' error.type=ValueError duration_ms=...
+```
+<!-- END NEW SECTION -->
+
 ### Production Configuration
 
 ```python
@@ -237,6 +326,7 @@ production_config = TelemetryConfig(
     logging=LoggingConfig(
         default_level="INFO",               # Don't spam with DEBUG
         console_formatter="json",           # Machine-readable
+        enabled_semantic_layers=["http"],   # Enable HTTP layer for request logging
         module_levels={
             "security": "DEBUG",            # Always verbose for security
             "performance": "WARNING",       # Only perf issues
@@ -284,3 +374,4 @@ This project is licensed under the **Apache 2.0 License**. See the [LICENSE](LIC
 - Boilerplate and repetitive code generation
 
 This approach allows us to leverage AI capabilities for productivity while maintaining human control over critical technical decisions and quality assurance.
+

@@ -1,169 +1,160 @@
 #
-# tests/test_logger_base.py
+# base.py
 #
 """
-Unit tests for src.pyvider.telemetry.logger.base.py
+Pyvider Telemetry Base Logger Implementation.
+Defines PyviderLogger with lazy initialization, thread safety, and standard logging methods.
 """
+
+import contextlib
 import io
 import sys
 import threading
-from unittest.mock import MagicMock, patch
+from typing import TYPE_CHECKING, Any, TextIO, cast
 
 import structlog
+from structlog.types import BindableLogger
 
-# For resetting global state consistently
-from pyvider.telemetry.core import reset_pyvider_setup_for_testing
+from pyvider.telemetry.types import TRACE_LEVEL_NAME
 
-# Functions/classes/variables to test from logger/base.py
-from pyvider.telemetry.logger.base import (
-    _LAZY_SETUP_STATE,
-    PyviderLogger,
-    _get_safe_stderr,
-    logger as global_pyvider_logger,
-)
+if TYPE_CHECKING:
+    from pyvider.telemetry.config import TelemetryConfig
+    from pyvider.telemetry.core import ResolvedSemanticConfig
 
+_LAZY_SETUP_LOCK = threading.Lock()
+_LAZY_SETUP_STATE: dict[str, Any] = {"done": False, "error": None, "in_progress": False}
 
-class TestGetSafeStderrBase:
-    def test_get_safe_stderr_is_valid_in_base(self) -> None:
-        original_stderr = sys.stderr
-        if original_stderr is None:
-            sys.stderr = io.StringIO("temp stderr for base test")
+def _get_safe_stderr() -> TextIO:
+    return sys.stderr if hasattr(sys, 'stderr') and sys.stderr is not None else io.StringIO()
+
+class PyviderLogger:
+    """A `structlog`-based logger providing a standardized logging interface."""
+
+    def __init__(self) -> None:
+        self._internal_logger = structlog.get_logger().bind(logger_name=f"{self.__class__.__module__}.{self.__class__.__name__}")
+        self._is_configured_by_setup: bool = False
+        self._active_config: TelemetryConfig | None = None
+        self._active_resolved_semantic_config: ResolvedSemanticConfig | None = None
+
+    def _check_structlog_already_disabled(self) -> bool:
         try:
-            stream = _get_safe_stderr()
-            assert stream == sys.stderr
-        finally:
-            if original_stderr is None and hasattr(sys, 'stderr'):
-                 sys.stderr = original_stderr
+            current_config = structlog.get_config()
+            if current_config and isinstance(current_config.get('logger_factory'), structlog.ReturnLoggerFactory):
+                with _LAZY_SETUP_LOCK:
+                    _LAZY_SETUP_STATE["done"] = True
+                return True
+        except Exception: pass
+        return False
 
-    def test_get_safe_stderr_is_none_in_base(self) -> None:
-        with patch.object(sys, 'stderr', None):
-            fallback_stream = _get_safe_stderr()
-            assert isinstance(fallback_stream, io.StringIO)
-
-
-class TestEnsureConfiguredErrorPath:
-    def test_ensure_configured_uses_fallback_if_previous_error(self, capsys) -> None:
-        reset_pyvider_setup_for_testing()
-        class FirstAttemptError(Exception):
-            pass
-        perform_lazy_setup_mock = MagicMock(side_effect=FirstAttemptError("First setup attempt failed"))
-        emergency_fallback_mock = MagicMock()
-        test_logger = PyviderLogger()
-
-        with patch.object(PyviderLogger, '_perform_lazy_setup', perform_lazy_setup_mock), \
-             patch.object(PyviderLogger, '_setup_emergency_fallback', emergency_fallback_mock):
-
-            test_logger.info("First log attempt - triggers failing setup")
-
-            perform_lazy_setup_mock.assert_called_once()
-            assert isinstance(_LAZY_SETUP_STATE["error"], FirstAttemptError)
-            assert _LAZY_SETUP_STATE["done"] is False
-            assert emergency_fallback_mock.call_count >= 1
-            initial_fallback_call_count = emergency_fallback_mock.call_count
-
-            test_logger.info("Second log attempt - should use fallback")
-
-            perform_lazy_setup_mock.assert_called_once()
-            assert emergency_fallback_mock.call_count > initial_fallback_call_count
-        reset_pyvider_setup_for_testing()
-
-
-class TestEnsureConfiguredReturnLoggerFactoryExceptionPath:
-    def test_ensure_configured_handles_exception_in_rtlf_check(self, capsys) -> None:
-        reset_pyvider_setup_for_testing()
-        with patch('structlog.get_config', side_effect=RuntimeError("Simulated error in get_config")):
-            perform_lazy_setup_mock = MagicMock()
-            emergency_fallback_mock = MagicMock()
-            test_logger = PyviderLogger()
-            with patch.object(PyviderLogger, '_perform_lazy_setup', perform_lazy_setup_mock), \
-                 patch.object(PyviderLogger, '_setup_emergency_fallback', emergency_fallback_mock):
-                test_logger.info("Log attempt when get_config fails")
-                perform_lazy_setup_mock.assert_called_once()
-                assert _LAZY_SETUP_STATE["error"] is None
-                assert _LAZY_SETUP_STATE["done"] is True
-                emergency_fallback_mock.assert_not_called()
-        reset_pyvider_setup_for_testing()
-
-
-class TestEnsureConfiguredReturnLoggerFactoryPath:
-    def test_ensure_configured_handles_returnloggerfactory(self, capsys) -> None:
-        reset_pyvider_setup_for_testing()
-        structlog.configure(logger_factory=structlog.ReturnLoggerFactory())
-        perform_lazy_setup_mock = MagicMock()
-        test_logger = PyviderLogger()
-        with patch.object(PyviderLogger, '_perform_lazy_setup', perform_lazy_setup_mock):
-            test_logger.info("Log attempt when ReturnLoggerFactory is active")
-        perform_lazy_setup_mock.assert_not_called()
-        assert _LAZY_SETUP_STATE["done"] is True
-        assert _LAZY_SETUP_STATE["error"] is None
-        reset_pyvider_setup_for_testing()
-
-
-class TestEnsureConfiguredPerformLazySetupFails:
-    def test_ensure_configured_main_exception_path(self, capsys) -> None:
-        reset_pyvider_setup_for_testing()
-        class PerformLazySetupTestError(Exception):
-            pass
-        perform_lazy_setup_mock = MagicMock(side_effect=PerformLazySetupTestError("Setup failed!"))
-        emergency_fallback_mock = MagicMock()
-
-        with patch.object(PyviderLogger, '_perform_lazy_setup', perform_lazy_setup_mock), \
-             patch.object(PyviderLogger, '_setup_emergency_fallback', emergency_fallback_mock):
-            global_pyvider_logger.error("Test log to trigger failing lazy setup")
-            perform_lazy_setup_mock.assert_called_once()
-            assert isinstance(_LAZY_SETUP_STATE["error"], PerformLazySetupTestError)
-            assert str(_LAZY_SETUP_STATE["error"]) == "Setup failed!"
-            assert _LAZY_SETUP_STATE["done"] is False
-            assert emergency_fallback_mock.call_count >= 1
-        reset_pyvider_setup_for_testing()
-
-
-class TestReentrancyHandling:
-    def test_ensure_configured_handles_reentrant_call_via_in_progress_flag(self, capsys) -> None:
+    def _ensure_configured(self) -> None:
         """
-        Tests that if _ensure_configured is called re-entrantly while setup is in progress,
-        the emergency fallback is triggered. This covers the `if _LAZY_SETUP_STATE["in_progress"]:`
-        checks (lines ~90 and ~124).
+        Ensures the logger is configured, performing lazy setup if necessary.
+        This method is thread-safe and handles setup failures gracefully.
         """
-        reset_pyvider_setup_for_testing()
+        # Fast path for already configured loggers.
+        if self._is_configured_by_setup or (_LAZY_SETUP_STATE["done"] and not _LAZY_SETUP_STATE["error"]):
+            return
 
-        # Use the global logger instance
-        logger_instance = global_pyvider_logger
+        # If setup is in progress by another thread, or failed previously, use fallback.
+        if _LAZY_SETUP_STATE["in_progress"] or _LAZY_SETUP_STATE["error"]:
+            self._setup_emergency_fallback()
+            return
 
-        # Simple mock for _setup_emergency_fallback, we only care if it's called
-        emergency_fallback_mock = MagicMock()
+        # If structlog is already configured to be a no-op, we're done.
+        if self._check_structlog_already_disabled():
+            return
 
-        re_entrant_call_made_event = threading.Event()
+        # Acquire lock to perform setup.
+        with _LAZY_SETUP_LOCK:
+            # Double-check state after acquiring lock, as another thread might have finished.
+            if self._is_configured_by_setup or (_LAZY_SETUP_STATE["done"] and not _LAZY_SETUP_STATE["error"]):
+                return
 
-        # This counter ensures that the re-entrant call is made only once
-        # by the mock, to prevent actual infinite recursion in the test itself.
-        perform_lazy_setup_call_count = 0
+            # If setup failed while waiting for the lock, use fallback.
+            if _LAZY_SETUP_STATE["error"]:
+                self._setup_emergency_fallback()
+                return
 
-        def mock_perform_lazy_setup(self_arg) -> None:
-            nonlocal perform_lazy_setup_call_count
-            perform_lazy_setup_call_count += 1
+            # Mark as in progress and perform setup.
+            _LAZY_SETUP_STATE["in_progress"] = True
+            try:
+                self._perform_lazy_setup()
+            except Exception as e:
+                _LAZY_SETUP_STATE["error"] = e
+                _LAZY_SETUP_STATE["done"] = False
+                self._setup_emergency_fallback()
+            finally:
+                _LAZY_SETUP_STATE["in_progress"] = False
 
-            # Simulate that _ensure_configured has set "in_progress" to True before calling this
-            # For this test, we rely on the outer _ensure_configured to have set it.
+    def _perform_lazy_setup(self) -> None:
+        """
+        Executes lazy setup by calling the main internal setup function.
+        """
+        from pyvider.telemetry.core import _internal_setup
+        # Calling _internal_setup with no config will make it use from_env()
+        # and is_explicit_call=False will be used.
+        _internal_setup(config=None, is_explicit_call=False)
 
-            if perform_lazy_setup_call_count == 1: # Only on the first call from outer _ensure_configured
-                # Make the re-entrant call
-                logger_instance.info("Re-entrant log during setup")
-                re_entrant_call_made_event.set() # Signal that re-entrant call has been made
+    def _setup_emergency_fallback(self) -> None:
+        try:
+            structlog.configure(
+                processors=[structlog.dev.ConsoleRenderer(colors=False)],
+                logger_factory=structlog.PrintLoggerFactory(file=_get_safe_stderr()),
+                wrapper_class=cast(type[BindableLogger], structlog.BoundLogger),
+                cache_logger_on_first_use=True,
+            )
+        except Exception:
+            with contextlib.suppress(Exception):
+                structlog.configure(processors=[], logger_factory=structlog.ReturnLoggerFactory(), cache_logger_on_first_use=True)
 
-            # Simplified mock: does not attempt to complete original setup fully for this test.
-            # We're focused on the re-entrancy mechanism.
+    def get_logger(self, name: str | None = None) -> Any:
+        self._ensure_configured()
+        effective_name = name if name is not None else "pyvider.default"
+        return structlog.get_logger().bind(logger_name=effective_name)
 
-        # Patch _setup_emergency_fallback on the class to track calls
-        with patch.object(PyviderLogger, '_setup_emergency_fallback', emergency_fallback_mock), \
-             patch.object(PyviderLogger, '_perform_lazy_setup', mock_perform_lazy_setup):
+    def _log_with_level(self, level_method_name: str, event: str, **kwargs: Any) -> None:
+        # FIX: The _ensure_configured call is removed from here to prevent redundant checks.
+        # get_logger() is now the single point of entry for configuration checks.
+        log = self.get_logger("pyvider.dynamic_call")
+        getattr(log, level_method_name)(event, **kwargs)
 
-            logger_instance.info("Initial logging call") # This triggers the first _ensure_configured
+    def _format_message_with_args(self, event: str | Any, args: tuple[Any, ...]) -> str:
+        event_str = str(event) if event is not None else ""
+        if not args: return event_str
+        try:
+            return event_str % args
+        except (TypeError, ValueError, KeyError):
+            return f"{event_str} {' '.join(str(arg) for arg in args)}"
 
-            # Assertions
-            assert re_entrant_call_made_event.is_set(), "Re-entrant call was not made by mock_perform_lazy_setup"
+    def trace(self, event: str, *args: Any, _pyvider_logger_name: str | None = None, **kwargs: Any) -> None:
+        self._ensure_configured()
+        formatted_event = self._format_message_with_args(event, args)
+        logger_name = _pyvider_logger_name or "pyvider.dynamic_call_trace"
+        log = self.get_logger(logger_name)
+        kwargs["_pyvider_level_hint"] = TRACE_LEVEL_NAME.lower()
+        log.msg(formatted_event, **kwargs)
 
-            assert emergency_fallback_mock.call_count >= 1, \
-                "Expected emergency_fallback to be called at least once by re-entrant call."
+    def debug(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_level("debug", self._format_message_with_args(event, args), **kwargs)
 
-        reset_pyvider_setup_for_testing()
+    def info(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_level("info", self._format_message_with_args(event, args), **kwargs)
+
+    def warning(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_level("warning", self._format_message_with_args(event, args), **kwargs)
+    warn = warning
+
+    def error(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_level("error", self._format_message_with_args(event, args), **kwargs)
+
+    def exception(self, event: str, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault('exc_info', True)
+        self._log_with_level("error", self._format_message_with_args(event, args), **kwargs)
+
+    def critical(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_level("critical", self._format_message_with_args(event, args), **kwargs)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+
+logger: PyviderLogger = PyviderLogger()

@@ -22,7 +22,6 @@ on:
 
 env:
   UV_VERSION: "0.7.8"
-  PYTHON_VERSION: "3.13"
 
 jobs:
   # ==================================================================================
@@ -30,7 +29,11 @@ jobs:
   # ==================================================================================
   validate:
     name: 🔍 Pre-Release Validation
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
     if: github.event.inputs.force_deploy != 'true'
     steps:
       - name: 📥 Checkout Code
@@ -38,10 +41,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
+      - name: 🐍 Setup Python  ${{ matrix.os }}-${{ matrix.python-version }}
         uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: ⚡ Install uv
         uses: astral-sh/setup-uv@v4
@@ -73,7 +74,11 @@ jobs:
   # ==================================================================================
   build:
     name: 📦 Build Release Package
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
     needs: [validate]
     if: always() && (needs.validate.result == 'success' || github.event.inputs.force_deploy == 'true')
     steps:
@@ -84,8 +89,6 @@ jobs:
 
       - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: ⚡ Install uv
         uses: astral-sh/setup-uv@v3
