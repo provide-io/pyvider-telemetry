@@ -5,7 +5,7 @@
 [project]
 name = "pyvider-telemetry"
 description = "Pyvider Telemetry: An opinionated, developer-friendly telemetry wrapper for Python."
-version = "0.1.0"
+version = "0.0.16"
 requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "Apache-2.0" }
