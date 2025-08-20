@@ -1,10 +1,3 @@
-You are absolutely right! My apologies for missing that. The `timed_block` context manager is a fantastic utility that definitely deserves to be highlighted in the documentation. It's a great example of how the library provides practical, high-level abstractions.
-
-I will now update both `README.md` and `docs/api-reference.md` to include this feature, integrating it seamlessly into the existing structure.
-
----
-
-### ###README.md###
 <div align="center">
 
 # 🐍📡 `pyvider.telemetry`
